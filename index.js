@@ -53,13 +53,55 @@ const io = new Server(fastify.server, {
   adapter: createAdapter(pubClient, subClient),
 });
 
-io.on("connection", (socket) => {
+io.on("connection", async (socket) => {
   console.log(`New client connected: ${socket.id}`);
+
+  // Check if "mylist" exists
+  const listExists = await fastify.redis.exists("mylist");
+
+  // Add sample data only if "mylist" does not exist
+  if (!listExists) {
+    console.log('"mylist" does not exist. Adding sample data.');
+    await fastify.redis.rpush("mylist", "A", "B", "C", "D");
+  } else {
+    console.log('"mylist" already exists. Skipping sample data addition.');
+  }
+
+  // Shuffle the list in place
+  await shuffleListInPlace("mylist");
+
+  // Retrieve and display the shuffled list
+  const result = await fastify.redis.lrange("mylist", 0, -1);
+  console.log("Shuffled list:", result);
 
   socket.on("disconnect", async () => {
     console.log(`Client disconnected: ${socket.id}`);
   });
 });
+
+async function shuffleListInPlace(key) {
+  const script = `
+    local list = redis.call('LRANGE', KEYS[1], 0, -1)
+    local n = #list
+    for i = n, 2, -1 do
+      local j = math.random(1, i)
+      list[i], list[j] = list[j], list[i]
+    end
+    redis.call('DEL', KEYS[1])
+    for i = 1, n do
+      redis.call('RPUSH', KEYS[1], list[i])
+    end
+    return nil
+  `;
+
+  try {
+    // Execute the Lua script with the given key
+    await fastify.redis.eval(script, 1, key);
+    console.log(`List ${key} shuffled in place.`);
+  } catch (error) {
+    console.error(`Error shuffling list ${key}:`, error);
+  }
+}
 
 const startServer = async () => {
   try {
